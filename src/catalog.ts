@@ -279,7 +279,7 @@ export const TASKS: TaskDefinition[] = [
     summary: 'Transform one text sequence into another using a seq2seq model.',
     useCases: ['Instruction rewriting', 'Question generation', 'Short text transformation', 'Text normalization'],
     scope: 'The FLAN-T5 example can perform prompt-formatted transformations such as rewriting or answering short instructions.',
-    limitations: 'The output follows the model's training and prompt format. It is not a general chat model and may need explicit task instructions.',
+    limitations: 'The output follows the model training and prompt format. It is not a general chat model and may need explicit task instructions.',
     model: 'Xenova/flan-t5-small',
     inputKind: 'text',
     defaultText: 'Rewrite this sentence in plain English: The utilization of the application is straightforward.',
