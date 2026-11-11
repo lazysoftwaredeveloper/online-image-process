@@ -162,7 +162,8 @@ export async function loadTaskPipeline(
 
   const loadMs = performance.now() - start;
   const cacheKey = [definition.task, definition.model, actualDevice, dtype].join('|');
-  pipelineCache.set(key, { instance, backend: actualDevice });\n  pipelineCache.set(cacheKey, { instance, backend: actualDevice });
+  pipelineCache.set(key, { instance, backend: actualDevice });
+  pipelineCache.set(cacheKey, { instance, backend: actualDevice });
 
   return {
     instance,
