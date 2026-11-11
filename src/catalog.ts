@@ -324,7 +324,7 @@ export const TASKS: TaskDefinition[] = [
     limitations: 'Candidate wording affects results. Similar labels can be hard to distinguish, and scores should be treated as relative ranking.',
     model: 'Xenova/clap-htsat-unfused',
     inputKind: 'audio',
-    defaultLabels: ['a dog barking', 'music playing', 'people talking', 'a car engine'],
+    defaultLabels: ['a dog barking', 'a cat meowing', 'music playing', 'people talking'],
     docs: 'https://huggingface.co/docs/transformers.js/api/pipelines#zeroshotaudioclassificationpipeline',
   },
   {
@@ -353,7 +353,7 @@ export const TASKS: TaskDefinition[] = [
     limitations: 'Label wording matters. Similar or overly broad labels may produce ambiguous scores.',
     model: 'Xenova/clip-vit-base-patch32',
     inputKind: 'image',
-    defaultLabels: ['a football match', 'a city street', 'a mountain landscape', 'a plate of food'],
+    defaultLabels: ['a cat', 'a dog', 'a tiger', 'a horse'],
     docs: 'https://huggingface.co/docs/transformers.js/api/pipelines#zeroshotimageclassificationpipeline',
   },
   {
@@ -367,7 +367,7 @@ export const TASKS: TaskDefinition[] = [
     limitations: 'Open-vocabulary detection is sensitive to wording and image quality. It may miss small or occluded objects.',
     model: 'Xenova/owlvit-base-patch32',
     inputKind: 'image',
-    defaultLabels: ['person', 'ball', 'goal', 'referee'],
+    defaultLabels: ['cat', 'dog', 'couch', 'person'],
     docs: 'https://huggingface.co/docs/transformers.js/api/pipelines#zeroshotobjectdetectionpipeline',
   },
 ];

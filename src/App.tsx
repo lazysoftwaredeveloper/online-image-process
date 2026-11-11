@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Activity,
   AlertCircle,
@@ -7,17 +7,14 @@ import {
   AudioLines,
   BookOpen,
   BrainCircuit,
-  Check,
   ChevronRight,
   Clock3,
   Code2,
   Copy,
   Cpu,
-  Database,
   FileAudio,
   FileImage,
   FileVideo,
-  FlaskConical,
   Gauge,
   Image as ImageIcon,
   Layers,
@@ -37,12 +34,9 @@ import {
   ADVANCED_APIS,
   CATEGORIES,
   SAMPLE_AUDIO,
-  SAMPLE_CAT_AUDIO,
   SAMPLE_DOCUMENT,
-  SAMPLE_IMAGE,
   TASKS,
   UNSUPPORTED_TASKS,
-  type TaskDefinition,
 } from './catalog';
 import {
   collectOutputMedia,
@@ -138,7 +132,7 @@ function ProgressBar({ progress }: { progress: ProgressSnapshot | null }) {
   );
 }
 
-function Pill({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'green' | 'blue' | 'amber' }) {
+function Pill({ children, tone = 'neutral' }: { children: ReactNode; tone?: 'neutral' | 'green' | 'blue' | 'amber' }) {
   return <span className={'pill pill-' + tone}>{children}</span>;
 }
 

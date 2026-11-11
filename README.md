@@ -14,7 +14,7 @@ A browser-first capability lab for Hugging Face Transformers.js. The goal is to 
 
 - Vite
 - React + TypeScript
-- @huggingface/transformers (pinned to the current stable release)
+- @huggingface/transformers 4.3.2 (pinned)
 - Browser Cache API for model assets (managed by Transformers.js)
 - Local Storage for benchmark history and preferences
 

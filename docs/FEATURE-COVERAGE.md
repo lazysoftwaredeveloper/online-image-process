@@ -6,7 +6,7 @@ This inventory is pinned to Transformers.js 4.3.2 and separates first-class pipe
 
 | Area | Pipeline ID | Demo | Example use | Input |
 |---|---|---|---|---|
-| Text | audio-classification | Yes | Identify speech, music, animals, or environmental sounds | Audio |
+| Audio | audio-classification | Yes | Identify speech, music, animals, or environmental sounds | Audio |
 | Audio | automatic-speech-recognition | Yes | Transcribe recorded speech | Audio |
 | Vision | background-removal | Yes | Create transparent product/portrait cut-outs | Image |
 | Vision | depth-estimation | Yes | Estimate relative depth for image effects and scene understanding | Image |
