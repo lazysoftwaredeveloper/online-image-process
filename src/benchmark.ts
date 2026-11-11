@@ -41,7 +41,7 @@ export function median(values: number[]): number | null {
 
 export function upsertBenchmark(
   current: BenchmarkRecord[],
-  incoming: Omit<BenchmarkRecord, 'warmInferenceMs' | 'medianWarmMs' | 'loadCount' | 'updatedAt'> & {
+  incoming: Omit<BenchmarkRecord, 'firstInferenceMs' | 'warmInferenceMs' | 'medianWarmMs' | 'loadCount' | 'updatedAt'> & {
     inferenceMs: number;
     newLoad: boolean;
   },

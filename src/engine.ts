@@ -1,17 +1,48 @@
 import {
   AutoConfig,
+  AutoFeatureExtractor,
   AutoImageProcessor,
+  AutoModel,
+  AutoModelForImageClassification,
+  AutoProcessor,
   AutoTokenizer,
+  ModelRegistry,
+  RawAudio,
   RawImage,
   Tensor,
+  cat,
+  stack,
+  mean_pooling,
+  layer_norm,
+  std_mean,
+  mean,
+  full,
+  full_like,
+  ones,
+  ones_like,
+  zeros,
+  zeros_like,
+  rand,
+  randn,
+  quantize_embeddings,
+  cos_sim,
+  dot,
+  log_softmax,
+  interpolate,
+  permute,
   env,
+  load_audio,
+  load_image,
   load_video,
+  LogLevel,
   pipeline,
+  random,
+  softmax,
 } from '@huggingface/transformers';
 import type { TaskDefinition } from './catalog';
 
 export type BackendPreference = 'auto' | 'webgpu' | 'wasm';
-export type DTypePreference = 'auto' | 'q8' | 'q4f16' | 'fp32';
+export type DTypePreference = 'auto' | 'q1' | 'q1f16' | 'q2' | 'q2f16' | 'q4' | 'q4f16' | 'q8' | 'fp16' | 'fp32' | 'int8' | 'uint8';
 
 export type ProgressSnapshot = {
   status: string;
@@ -34,6 +65,11 @@ export type LoadedTask = {
 };
 
 const pipelineCache = new Map<string, { instance: any; backend: 'webgpu' | 'wasm' }>();
+const tokenizerCache = new Map<string, any>();
+const processorCache = new Map<string, any>();
+const featureExtractorCache = new Map<string, any>();
+const directModelCache = new Map<string, { model: any; processor: any; backend: 'webgpu' | 'wasm' }>();
+let embeddingGemmaCache: { processor: any; model: any; backend: 'webgpu' | 'wasm' } | null = null;
 
 function createProgressTracker(onProgress?: (snapshot: ProgressSnapshot) => void) {
   const fileBytes = new Map<string, number>();
@@ -65,7 +101,7 @@ function createProgressTracker(onProgress?: (snapshot: ProgressSnapshot) => void
       lastFile = event?.file ? String(event.file) : lastFile;
       if (typeof event?.progress === 'number') lastProgress = event.progress;
       const now = performance.now();
-      if (event?.status === 'progress' || event?.status === 'done') {
+      if (event?.status === 'progress' || event?.status === 'done' || event?.status === 'progress_total') {
         if (firstProgressAt === null) firstProgressAt = now;
         lastProgressAt = now;
       }
@@ -129,8 +165,10 @@ export async function loadTaskPipeline(
 
   const preferredDevice: 'webgpu' | 'wasm' =
     backendPreference === 'wasm' ? 'wasm' : canUseWebGPU ? 'webgpu' : 'wasm';
-  const key = [definition.task, definition.model, preferredDevice, dtype].join('|');
-  const cached = pipelineCache.get(key);
+  // Keep the requested backend in the key. An `auto` request may fall back to WASM;
+  // that fallback must not make an explicit later `webgpu` request return a WASM model.
+  const requestKey = [definition.task, definition.model, backendPreference, dtype].join('|');
+  const cached = pipelineCache.get(requestKey);
   if (cached) {
     return {
       instance: cached.instance,
@@ -161,9 +199,10 @@ export async function loadTaskPipeline(
   }
 
   const loadMs = performance.now() - start;
-  const cacheKey = [definition.task, definition.model, actualDevice, dtype].join('|');
-  pipelineCache.set(key, { instance, backend: actualDevice });
-  pipelineCache.set(cacheKey, { instance, backend: actualDevice });
+  const cacheEntry = { instance, backend: actualDevice };
+  const actualDeviceKey = [definition.task, definition.model, actualDevice, dtype].join('|');
+  pipelineCache.set(requestKey, cacheEntry);
+  pipelineCache.set(actualDeviceKey, cacheEntry);
 
   return {
     instance,
@@ -203,6 +242,21 @@ export async function runTaskInference(
       return await instance(image, labels);
     case 'zero-shot-audio-classification':
       return await instance(audio, labels);
+    case 'sentence-similarity': {
+      const [left, right] = await Promise.all([
+        instance(text, { pooling: 'mean', normalize: true }),
+        instance(values.question, { pooling: 'mean', normalize: true }),
+      ]);
+      const leftVector = left.tolist()[0] as number[];
+      const rightVector = right.tolist()[0] as number[];
+      return {
+        sentenceA: text,
+        sentenceB: values.question,
+        similarity: cos_sim(leftVector, rightVector),
+        embeddingDimensions: leftVector.length,
+        interpretation: 'A relative semantic similarity score, not a calibrated probability.',
+      };
+    }
     case 'feature-extraction':
       return await instance(text, { pooling: 'mean', normalize: true });
     case 'text-generation':
@@ -233,33 +287,66 @@ export async function runTaskInference(
 }
 
 export async function runTokenizerLab(text: string, onProgress?: (snapshot: ProgressSnapshot) => void) {
+  const modelId = 'onnx-community/SmolLM2-135M-Instruct-ONNX-MHA';
   const tracker = createProgressTracker(onProgress);
-  const startedAt = performance.now();
-  const tokenizer = await AutoTokenizer.from_pretrained('Xenova/bert-base-uncased', {
-    progress_callback: tracker.callback,
-  } as any);
+  const loadStartedAt = performance.now();
+  const cacheHit = tokenizerCache.has(modelId);
+  let tokenizer: any = tokenizerCache.get(modelId);
+  if (!tokenizer) {
+    tokenizer = await AutoTokenizer.from_pretrained(modelId, {
+      progress_callback: tracker.callback,
+    } as any);
+    tokenizerCache.set(modelId, tokenizer);
+  }
+  const loadMs = performance.now() - loadStartedAt;
+  const inferenceStartedAt = performance.now();
   const encoding: any = await tokenizer(text);
   const ids = encoding.input_ids.tolist()[0].map((value: bigint | number) => Number(value));
-  const tokens = tokenizer.convert_ids_to_tokens(ids);
+  const tokens = tokenizer.tokenize(text);
   const decoded = tokenizer.decode(ids, { skip_special_tokens: false });
+  let chatTemplate: string | null = null;
+  let chatTemplateError: string | null = null;
+  try {
+    chatTemplate = tokenizer.apply_chat_template(
+      [{ role: 'user', content: text }],
+      { tokenize: false, add_generation_prompt: true },
+    );
+  } catch (error) {
+    chatTemplateError = error instanceof Error ? error.message : String(error);
+  }
   return {
-    elapsedMs: performance.now() - startedAt,
+    modelId,
+    cacheHit,
+    loadMs,
+    inferenceMs: performance.now() - inferenceStartedAt,
+    elapsedMs: performance.now() - loadStartedAt,
     progress: tracker.finish(),
     tokenCount: ids.length,
     tokens,
     ids,
     decoded,
+    chatTemplate,
+    chatTemplateError,
   };
 }
 
-export async function runConfigInspector(modelId: string, onProgress?: (snapshot: ProgressSnapshot) => void) {
+export async function runConfigInspector(
+  modelId: string,
+  onProgress?: (snapshot: ProgressSnapshot) => void,
+  revision = 'main',
+  localFilesOnly = false,
+) {
   const tracker = createProgressTracker(onProgress);
   const startedAt = performance.now();
   const config: any = await AutoConfig.from_pretrained(modelId, {
+    revision,
+    local_files_only: localFilesOnly,
     progress_callback: tracker.callback,
   } as any);
   return {
     elapsedMs: performance.now() - startedAt,
+    revision,
+    localFilesOnly,
     progress: tracker.finish(),
     config: {
       model_type: config.model_type,
@@ -274,16 +361,36 @@ export async function runConfigInspector(modelId: string, onProgress?: (snapshot
   };
 }
 
-export async function runProcessorLab(blob: Blob) {
+export async function runProcessorLab(
+  blob: Blob,
+  onProgress?: (snapshot: ProgressSnapshot) => void,
+) {
+  const tracker = createProgressTracker(onProgress);
   const rawImage = await RawImage.read(blob);
-  const processor: any = await AutoImageProcessor.from_pretrained('Xenova/vit-base-patch16-224');
+  const modelId = 'Xenova/clip-vit-base-patch32';
+  const loadStartedAt = performance.now();
+  const cacheHit = processorCache.has(modelId);
+  let processor: any = processorCache.get(modelId);
+  if (!processor) {
+    processor = await AutoProcessor.from_pretrained(modelId, {
+      progress_callback: tracker.callback,
+    } as any);
+    processorCache.set(modelId, processor);
+  }
+  const loadMs = performance.now() - loadStartedAt;
+  const preprocessStartedAt = performance.now();
   const processed: any = await processor(rawImage);
+  const preprocessMs = performance.now() - preprocessStartedAt;
   const pixelValues = processed?.pixel_values;
   return {
     image: rawImage,
     width: rawImage.width,
     height: rawImage.height,
     channels: rawImage.channels,
+    cacheHit,
+    loadMs,
+    preprocessMs,
+    progress: tracker.finish(),
     tensor: pixelValues
       ? {
           dims: pixelValues.dims,
@@ -296,31 +403,359 @@ export async function runProcessorLab(blob: Blob) {
 }
 
 export async function runImageIOLab(blob: Blob) {
+  const startedAt = performance.now();
   const image = await RawImage.read(blob);
   const preview = await image.clone().resize(320, -1);
   const grayscale = await image.clone().resize(320, -1);
   grayscale.grayscale();
+  const rgba = image.clone().rgba();
   return {
     image: preview,
     grayscale,
     width: image.width,
     height: image.height,
     channels: image.channels,
+    rgbaChannels: rgba.channels,
     bytes: image.data.byteLength,
+    elapsedMs: performance.now() - startedAt,
+  };
+}
+
+export async function runAudioIOLab(url: string) {
+  const startedAt = performance.now();
+  const samples = await load_audio(url, 16000);
+  const audio = new RawAudio(samples, 16000);
+  let peakAmplitude = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    peakAmplitude = Math.max(peakAmplitude, Math.abs(samples[index]));
+  }
+  return {
+    audio,
+    sampleRate: 16000,
+    sampleCount: samples.length,
+    durationSeconds: samples.length / 16000,
+    peakAmplitude,
+    previewSamples: Array.from(samples.slice(0, 16)),
+    elapsedMs: performance.now() - startedAt,
+  };
+}
+
+export async function runAudioFeatureExtractorLab(
+  url: string,
+  onProgress?: (snapshot: ProgressSnapshot) => void,
+) {
+  const modelId = 'onnx-community/whisper-tiny.en';
+  const tracker = createProgressTracker(onProgress);
+  const loadStartedAt = performance.now();
+  const cacheHit = featureExtractorCache.has(modelId);
+  let extractor: any = featureExtractorCache.get(modelId);
+  if (!extractor) {
+    extractor = await AutoFeatureExtractor.from_pretrained(modelId, {
+      progress_callback: tracker.callback,
+    } as any);
+    featureExtractorCache.set(modelId, extractor);
+  }
+  const loadMs = performance.now() - loadStartedAt;
+  const samples = await load_audio(url, 16000);
+  const preprocessStartedAt = performance.now();
+  const processed: any = await extractor(samples);
+  const preprocessMs = performance.now() - preprocessStartedAt;
+  const inputFeatures = processed?.input_features;
+  return {
+    modelId,
+    cacheHit,
+    loadMs,
+    preprocessMs,
+    sampleRate: 16000,
+    sampleCount: samples.length,
+    durationSeconds: samples.length / 16000,
+    outputKeys: Object.keys(processed ?? {}),
+    inputFeatures: inputFeatures
+      ? {
+          dims: inputFeatures.dims,
+          type: inputFeatures.type,
+          size: inputFeatures.size,
+          preview: Array.from(inputFeatures.data).slice(0, 16),
+        }
+      : null,
+    progress: tracker.finish(),
   };
 }
 
 export async function runVideoIOLab(blob: Blob) {
-  const video: any = await load_video(blob, { fps: 1, num_frames: 8 });
+  const startedAt = performance.now();
+  const url = URL.createObjectURL(blob);
+  try {
+    const video: any = await load_video(url, { fps: 1, num_frames: 8 });
+    return {
+      width: video.width,
+      height: video.height,
+      fps: video.fps,
+      duration: video.duration,
+      frameCount: (video.frames ?? []).length,
+      frames: (video.frames ?? []).map((frame: any, index: number) => ({
+        timestamp: frame.timestamp ?? index,
+        image: frame.image ?? frame,
+      })),
+      elapsedMs: performance.now() - startedAt,
+    };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+export async function runModelRegistryLab(
+  task: string,
+  modelId: string,
+  dtype: DTypePreference,
+  device: 'webgpu' | 'wasm' | 'auto' = 'auto',
+  revision = 'main',
+  localFilesOnly = false,
+) {
+  const options: any = { revision, local_files_only: localFilesOnly };
+  if (dtype !== 'auto') options.dtype = dtype;
+  if (device !== 'auto') options.device = device;
+  const startedAt = performance.now();
+  const [allFiles, pipelineFiles, modelFiles, tokenizerFiles, processorFiles, availableDtypes, modelCache, modelCacheFiles, pipelineCache, pipelineCacheFiles] = await Promise.all([
+    (ModelRegistry as any).get_files(modelId, options),
+    (ModelRegistry as any).get_pipeline_files(task, modelId, options),
+    (ModelRegistry as any).get_model_files(modelId, options),
+    (ModelRegistry as any).get_tokenizer_files(modelId),
+    (ModelRegistry as any).get_processor_files(modelId),
+    (ModelRegistry as any).get_available_dtypes(modelId, options),
+    (ModelRegistry as any).is_cached(modelId, options),
+    (ModelRegistry as any).is_cached_files(modelId, options),
+    (ModelRegistry as any).is_pipeline_cached(task, modelId, options),
+    (ModelRegistry as any).is_pipeline_cached_files(task, modelId, options),
+  ]);
+  const fileMetadata = await Promise.all(
+    (allFiles as string[]).map((file) => (ModelRegistry as any).get_file_metadata(modelId, file, options)),
+  );
+  const totalBytes = fileMetadata.reduce(
+    (sum: number, item: any) => sum + (typeof item?.size === 'number' ? item.size : 0),
+    0,
+  );
   return {
-    width: video.width,
-    height: video.height,
-    fps: video.fps,
-    duration: video.duration,
-    frames: (video.frames ?? []).map((frame: any, index: number) => ({
-      timestamp: frame.timestamp ?? index,
-      image: frame.image ?? frame,
-    })),
+    task,
+    modelId,
+    requestedDtype: dtype,
+    requestedDevice: device,
+    allFiles,
+    pipelineFiles,
+    modelFiles,
+    tokenizerFiles,
+    processorFiles,
+    fileMetadata,
+    fileCount: (allFiles as string[]).length,
+    totalBytes,
+    totalMiB: totalBytes > 0 ? totalBytes / 1024 / 1024 : null,
+    availableDtypes,
+    modelCache,
+    modelCacheFiles,
+    pipelineCache,
+    pipelineCacheFiles,
+    elapsedMs: performance.now() - startedAt,
+  };
+}
+
+export async function clearModelRegistryCache(
+  task: string,
+  modelId: string,
+  dtype: DTypePreference,
+  scope: 'pipeline' | 'model' = 'pipeline',
+  revision = 'main',
+) {
+  const options: any = { revision };
+  if (dtype !== 'auto') options.dtype = dtype;
+  const pipelineKeys = Array.from(pipelineCache.keys()).filter((key) => {
+    const [cachedTask, cachedModel] = key.split('|');
+    return cachedModel === modelId && (scope === 'model' || cachedTask === task);
+  });
+  const disposedPipelines = new Set<any>();
+  for (const key of pipelineKeys) {
+    const cached = pipelineCache.get(key);
+    if (cached?.instance && !disposedPipelines.has(cached.instance)) {
+      await cached.instance.dispose?.();
+      disposedPipelines.add(cached.instance);
+    }
+    pipelineCache.delete(key);
+  }
+
+  let directModelKeys: string[] = [];
+  if (scope === 'model') {
+    directModelKeys = Array.from(directModelCache.keys()).filter((key) => key.startsWith(modelId + '|'));
+    for (const key of directModelKeys) {
+      const cached = directModelCache.get(key);
+      await cached?.model?.dispose?.();
+      directModelCache.delete(key);
+    }
+    tokenizerCache.delete(modelId);
+    processorCache.delete(modelId);
+    featureExtractorCache.delete(modelId);
+    if (modelId === 'onnx-community/embeddinggemma-2-ONNX' && embeddingGemmaCache) {
+      await embeddingGemmaCache.model?.dispose?.();
+      embeddingGemmaCache = null;
+    }
+  }
+
+  const result = scope === 'model'
+    ? await (ModelRegistry as any).clear_cache(modelId, options)
+    : await (ModelRegistry as any).clear_pipeline_cache(task, modelId, options);
+  return {
+    ...result,
+    clearedScope: scope,
+    inMemoryPipelinesDisposed: disposedPipelines.size,
+    inMemoryPipelineKeysRemoved: pipelineKeys.length,
+    inMemoryDirectModelsDisposed: directModelKeys.length,
+  };
+}
+
+export function runRandomLab(seed: number) {
+  const rng = new (random as any).Random(seed);
+  const sequence = Array.from({ length: 6 }, () => rng.random());
+  const shuffled = [1, 2, 3, 4, 5, 6];
+  rng.shuffle(shuffled);
+  const weightedChoice = rng.choices(['text', 'image', 'audio'], [5, 3, 2]);
+  const normalSample = rng.gauss(0, 1);
+  return {
+    seed,
+    sequence,
+    shuffled,
+    weightedChoice,
+    normalSample,
+    note: 'The same seed reproduces the sequence when no concurrent calls share this generator.',
+  };
+}
+
+export async function runDirectModelLab(
+  blob: Blob,
+  backendPreference: BackendPreference,
+  dtype: DTypePreference,
+  onProgress?: (snapshot: ProgressSnapshot) => void,
+) {
+  const canUseWebGPU = backendPreference === 'wasm' ? false : await detectWebGPU();
+  if (backendPreference === 'webgpu' && !canUseWebGPU) {
+    throw new Error('This direct-model example requires WebGPU. Choose Auto or use a browser/device with WebGPU enabled.');
+  }
+  const preferredDevice: 'webgpu' | 'wasm' =
+    backendPreference === 'wasm' ? 'wasm' : canUseWebGPU ? 'webgpu' : 'wasm';
+  const modelId = 'Xenova/vit-base-patch16-224';
+  const tracker = createProgressTracker(onProgress);
+  const loadStartedAt = performance.now();
+  let actualDevice = preferredDevice;
+  let key = [modelId, actualDevice, dtype].join('|');
+  let cached = directModelCache.get(key);
+  let cacheHit = Boolean(cached);
+  if (!cached) {
+    const loadPair = async (device: 'webgpu' | 'wasm') => {
+      const options: any = { device, progress_callback: tracker.callback };
+      if (dtype !== 'auto') options.dtype = dtype;
+      const [processor, model] = await Promise.all([
+        AutoImageProcessor.from_pretrained(modelId, { progress_callback: tracker.callback } as any),
+        AutoModelForImageClassification.from_pretrained(modelId, options),
+      ]);
+      return { processor, model, backend: device as 'webgpu' | 'wasm' };
+    };
+    try {
+      cached = await loadPair(preferredDevice);
+    } catch (error) {
+      if (backendPreference !== 'auto' || preferredDevice !== 'webgpu') throw error;
+      actualDevice = 'wasm';
+      key = [modelId, actualDevice, dtype].join('|');
+      cached = directModelCache.get(key) ?? await loadPair('wasm');
+      cacheHit = directModelCache.has(key);
+    }
+    directModelCache.set(key, cached);
+  }
+  const loadMs = performance.now() - loadStartedAt;
+  const image = await RawImage.read(blob);
+  const preprocessStartedAt = performance.now();
+  const inputs = await cached.processor(image);
+  const preprocessMs = performance.now() - preprocessStartedAt;
+  const inferenceStartedAt = performance.now();
+  const output: any = await cached.model(inputs);
+  const inferenceMs = performance.now() - inferenceStartedAt;
+  const logits = output.logits.tolist()[0] as number[];
+  const probabilities = Array.from(softmax(logits));
+  const id2label = cached.model.config.id2label ?? {};
+  const predictions = probabilities
+    .map((score, index) => ({
+      label: id2label[index] ?? id2label[String(index)] ?? String(index),
+      score,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
+  return {
+    modelId,
+    backend: cached.backend,
+    dtype,
+    cacheHit,
+    width: image.width,
+    height: image.height,
+    loadMs,
+    preprocessMs,
+    inferenceMs,
+    predictions,
+    logitsShape: output.logits.dims,
+    progress: tracker.finish(),
+  };
+}
+
+export async function runMultimodalEmbeddingLab(
+  kind: 'image' | 'audio' | 'video',
+  mediaUrl: string,
+  query: string,
+  onProgress?: (snapshot: ProgressSnapshot) => void,
+) {
+  const modelId = 'onnx-community/embeddinggemma-2-ONNX';
+  const tracker = createProgressTracker(onProgress);
+  const loadStartedAt = performance.now();
+  const cacheHit = embeddingGemmaCache !== null;
+  if (!embeddingGemmaCache) {
+    const processor: any = await AutoProcessor.from_pretrained(modelId, {
+      progress_callback: tracker.callback,
+    } as any);
+    const backend = await detectWebGPU() ? 'webgpu' : 'wasm';
+    const model: any = await AutoModel.from_pretrained(modelId, {
+      device: backend,
+      dtype: 'q4',
+      progress_callback: tracker.callback,
+    } as any);
+    embeddingGemmaCache = { processor, model, backend };
+  }
+  const { processor, model, backend } = embeddingGemmaCache;
+  const loadMs = performance.now() - loadStartedAt;
+  const inferenceStartedAt = performance.now();
+  const textInputs = await processor(['task: search result | query: ' + query]);
+  const textOutput: any = await model(textInputs);
+  let mediaInputs: any;
+  if (kind === 'image') {
+    const image = await load_image(mediaUrl);
+    mediaInputs = await processor(null, image);
+  } else if (kind === 'audio') {
+    const audio = await load_audio(mediaUrl, 16000);
+    mediaInputs = await processor(null, null, audio);
+  } else {
+    const video = await load_video(mediaUrl, { fps: 1, num_frames: 16 });
+    mediaInputs = await processor(null, null, null, video);
+  }
+  const mediaOutput: any = await model(mediaInputs);
+  const textVector = textOutput.sentence_embedding.tolist()[0] as number[];
+  const mediaVector = mediaOutput.sentence_embedding.tolist()[0] as number[];
+  return {
+    modelId,
+    kind,
+    backend,
+    dtype: 'q4',
+    cacheHit,
+    loadMs,
+    inferenceMs: performance.now() - inferenceStartedAt,
+    progress: tracker.finish(),
+    similarity: cos_sim(textVector, mediaVector),
+    embeddingDimensions: textVector.length,
+    textEmbeddingPreview: textVector.slice(0, 12),
+    mediaEmbeddingPreview: mediaVector.slice(0, 12),
+    interpretation: 'The model embeds both inputs in a shared vector space; similarity is a ranking signal, not a probability.',
   };
 }
 
@@ -329,16 +764,91 @@ export function runTensorLab() {
   const values = tensor.tolist() as number[][];
   const vectorA = [0.2, 0.4, 0.8];
   const vectorB = [0.1, 0.5, 0.7];
-  const dot = vectorA.reduce((sum, value, index) => sum + value * vectorB[index], 0);
-  const normA = Math.sqrt(vectorA.reduce((sum, value) => sum + value * value, 0));
-  const normB = Math.sqrt(vectorB.reduce((sum, value) => sum + value * value, 0));
-  const cosineSimilarity = dot / (normA * normB);
+  const cosineSimilarity = cos_sim(vectorA, vectorB);
+  const dotProduct = dot(vectorA, vectorB);
+  const softmaxInput = [1.2, 0.5, -0.2];
+  const softmaxOutput = Array.from(softmax(softmaxInput));
+  const logSoftmaxOutput = Array.from(log_softmax(softmaxInput));
+  const tensorOps = {
+    sum: tensor.sum().item(),
+    mean: tensor.mean().item(),
+    l2Norm: tensor.norm(2).item(),
+    min: tensor.min().item(),
+    max: tensor.max().item(),
+    argmin: Number(tensor.argmin().item()),
+    argmax: Number(tensor.argmax().item()),
+    transpose: tensor.transpose(1, 0).tolist(),
+    normalized: tensor.normalize(2, 1).tolist(),
+    clamped: tensor.clamp(0, 4).tolist(),
+    flattened: tensor.flatten(0, 1).tolist(),
+    sigmoid: tensor.sigmoid().tolist(),
+    doubled: tensor.mul(2).tolist(),
+  };
+  const a = new Tensor('float32', new Float32Array([1, 2, 3, 4]), [2, 2]);
+  const b = new Tensor('float32', new Float32Array([5, 6, 7, 8]), [2, 2]);
+  const hiddenState = new Tensor('float32', new Float32Array([1, 2, 3, 4, 5, 6]), [1, 2, 3]);
+  const attentionMask = new Tensor('int64', new BigInt64Array([1n, 1n]), [1, 2]);
+  const [std, average] = std_mean(a, null, 1, false);
+  const pooled = mean_pooling(hiddenState, attentionMask);
+  const quantizable = new Tensor('float32', new Float32Array([1, -1, 0.5, -0.5, 2, -2, 3, -3]), [1, 8]);
+  const sampleTensor = new Tensor('float32', new Float32Array([1, 2, 3, 4, 5, 6]), [2, 3]);
+  const permuted = permute(sampleTensor, [1, 0]);
+  const imageTensor = new Tensor('float32', new Float32Array([1, 2, 3, 4]), [1, 2, 2]);
+  const interpolated = interpolate(imageTensor, [4, 4]);
   return {
     tensor: { type: tensor.type, dims: tensor.dims, size: tensor.size, values },
+    tensorOps,
+    tensorUtilities: {
+      concatenatedShape: cat([a, b], 0).dims,
+      stackedShape: stack([a, b], 0).dims,
+      pooled: pooled.tolist(),
+      layerNormalized: layer_norm(a, [2]).tolist(),
+      standardDeviation: std.tolist(),
+      mean: average.tolist(),
+      meanFunction: mean(a, null, false).tolist(),
+      full: full([2, 2], 3).tolist(),
+      fullLike: full_like(a, 0).tolist(),
+      ones: ones([2, 2]).tolist(),
+      onesLike: ones_like(a).tolist(),
+      zeros: zeros([2, 2]).tolist(),
+      zerosLike: zeros_like(a).tolist(),
+      random: rand([2, 2]).tolist(),
+      randomNormal: randn([2, 2]).tolist(),
+      quantizedEmbedding: quantize_embeddings(quantizable, 'binary').tolist(),
+    },
     vectorA,
     vectorB,
     cosineSimilarity,
+    dotProduct,
+    softmaxInput,
+    softmaxOutput,
+    logSoftmaxOutput,
+    tensorMath: {
+      permutedShape: permuted.dims,
+      permuted: permuted.tolist(),
+      interpolatedShape: interpolated.dims,
+      interpolatedPreview: interpolated.tolist()[0].slice(0, 8),
+    },
   };
+}
+
+export async function applyRuntimeSettings(settings: {
+  useBrowserCache: boolean;
+  useWasmCache: boolean;
+  allowRemoteModels: boolean;
+  allowLocalModels: boolean;
+  localModelPath: string;
+  logLevel: number;
+}) {
+  (env as any).useBrowserCache = settings.useBrowserCache;
+  (env as any).useWasmCache = settings.useWasmCache;
+  (env as any).allowRemoteModels = settings.allowRemoteModels;
+  (env as any).allowLocalModels = settings.allowLocalModels;
+  if (settings.localModelPath.trim()) {
+    (env as any).localModelPath = settings.localModelPath.trim();
+  }
+  (env as any).logLevel = settings.logLevel;
+  return await inspectRuntime();
 }
 
 export async function inspectRuntime() {
@@ -350,8 +860,20 @@ export async function inspectRuntime() {
     supportedDevices,
     browserCache: (env as any).useBrowserCache,
     wasmCache: (env as any).useWasmCache,
+    filesystemAvailable: (env as any).useFS,
+    filesystemCache: (env as any).useFSCache,
+    customCacheEnabled: (env as any).useCustomCache,
+    crossOriginStorageExperimental: (env as any).experimental_useCrossOriginStorage,
     cacheKey: (env as any).cacheKey,
+    hasCustomFetch: typeof (env as any).fetch === 'function',
+    cacheDir: (env as any).cacheDir,
+    localModelPath: (env as any).localModelPath,
+    remoteHost: (env as any).remoteHost,
+    remotePathTemplate: (env as any).remotePathTemplate,
+    allowLocalModels: (env as any).allowLocalModels,
     allowRemoteModels: (env as any).allowRemoteModels,
+    logLevel: (env as any).logLevel,
+    availableLogLevels: LogLevel,
     hardwareConcurrency: navigator.hardwareConcurrency ?? null,
     deviceMemory: (navigator as any).deviceMemory ?? null,
     userAgent: navigator.userAgent,

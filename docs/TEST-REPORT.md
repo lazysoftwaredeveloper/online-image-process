@@ -1,51 +1,85 @@
 # Browser performance test report
 
-## Status
+## Verification and measurement status
 
-**Measurement status: awaiting a real browser/device run.**
+This report separates checks that can be run in CI from real model timings that require a browser/device session.
 
-This repository does not contain fabricated latency numbers. A model's first-use duration is dominated by model artifact size, network throughput, browser cache state, browser/runtime version, device memory, and WebGPU/WASM support. A single number measured on another machine would not be a reliable promise to visitors.
-
-The live Benchmark panel measures each selected task in the visitor's own browser and stores the result locally. Export the JSON/CSV report after testing to attach a reproducible, device-specific result set to a release.
-
-## What is measured
-
-| Metric | Meaning | Limitation |
+| Check | Status | Evidence |
 |---|---|---|
-| Model load + runtime setup | Time from pipeline creation to a ready pipeline | Includes downloads on cache misses, parsing, session creation, and runtime initialization; not pure network time |
-| Observed transfer bytes | Sum of the largest loaded byte count reported for each file in progress callbacks | Only available when the library emits file progress events; cache hits may emit no transfer events |
-| Observed transfer window | First-to-last progress event span | A progress span is not guaranteed to equal the complete network transfer time |
-| First inference | First completed inference after the pipeline is ready | Includes one-time warm-up/kernel compilation costs that may occur on first execution |
-| Warm inference | Each subsequent completed inference | Input size and output length still affect runtime |
-| Warm median | Median of recorded warm inference runs | Compare only like-for-like model, input, backend, dtype, and device |
+| Catalog coverage tests | Included in CI | 26 demo cards: 25 unique first-class pipeline task IDs plus sentence similarity |
+| Advanced API coverage tests | Included in CI | 14 advanced API areas |
+| Benchmark aggregation tests | Included in CI | First-use, warm-run, median, and local-storage behavior |
+| TypeScript + production build | Included in CI | `npm run build` runs `tsc --noEmit` and `vite build` |
+| Cold model download timings | Not yet measured on a real browser/device | Must clear browser model cache and run the demos |
+| Warm inference timings | Not yet measured on a real browser/device | Must repeat the same input after model initialization |
+| Cross-browser manual smoke tests | Not yet completed | Run on target browsers/devices |
 
-The interface calls the initialization metric **Model load + runtime setup** rather than “download time”. It only labels the transfer span as observed telemetry when progress events provide enough evidence. This avoids conflating download, parsing, decompression, and WebGPU shader compilation.
+No device-specific timings are fabricated in this document. Model sizes, network throughput, cache state, GPU support, memory, browser versions, and ONNX Runtime initialization can change first-use and repeat-use timings substantially.
 
-## Repeatable test protocol
+## What the application measures
 
-1. Use a current Chromium-based browser and note the browser version, OS, CPU/GPU, RAM, and network conditions.
-2. For a cold-cache measurement, clear the site's storage and the browser's cached model assets for the Hugging Face Hub, then reload the playground. A normal page refresh is not a cold-cache test.
-3. Open one demo at a time. Keep the same backend and dtype for all repetitions.
-4. Click **Load model & run** once. Record model load + runtime setup, progress telemetry, and first inference.
-5. Run the same input at least five more times. Use the warm median, not the fastest run.
-6. Repeat in a new tab without clearing the browser cache to observe cached initialization behavior.
-7. Export the benchmark report. Do not compare measurements across different inputs or devices as if they were controlled experiments.
+### Pipeline demos
 
-## Per-demo reporting
+Each pipeline demo exposes these values directly beside its output:
 
-Every pipeline demo shows:
-- model ID and selected backend/dtype;
-- current model load + runtime setup time;
-- progress events and observed transfer bytes, when available;
-- first inference time;
-- warm inference time and local median;
-- a note that timings are device- and input-dependent.
+| Metric | Meaning | Caveat |
+|---|---|---|
+| Model load + setup | Time from pipeline initialization request until the pipeline is ready | Includes downloads on a cache miss, model parsing, ONNX session creation, and runtime setup; it is not pure network time |
+| Observed model transfer | Sum of the largest `loaded` byte count reported for each file in progress callbacks | Only available when the library emits file-level progress events; it is observed telemetry, not guaranteed exact wire bytes |
+| Progress events | Number of progress callback events observed | Some cached files or runtime phases may emit no events |
+| Transfer event window | Time from the first to last observed progress event | Not guaranteed to equal total network download duration |
+| First inference | Time to complete the first inference after initialization | May include first-run kernel/shader compilation and warm-up |
+| Warm inference | Time for each subsequent run | Input length, image resolution, audio duration, and generated output length affect the result |
+| Warm median | Median of recorded warm runs | Compare only matching task, model, input, backend, dtype, and device |
 
-The app's browser-local benchmark history is not uploaded to a server. Clearing site data also clears this history.
+The **Benchmark · 1 + 5 runs** action records one first inference followed by five repeated runs. Results are stored in the browser's Local Storage and can be exported as JSON or CSV. They are not uploaded to an application server.
 
-## Current verified status
+### Advanced API demos
 
-- Repository source: implemented with a browser-side benchmark harness.
-- Automated build/test status: to be confirmed by the GitHub Actions run for the implementation branch.
-- Real model inference timings: not yet measured in a controlled browser session.
-- Cross-browser compatibility: not yet manually verified.
+The API lab displays total execution time for every demo. Model-backed labs additionally return the relevant initialization and operation timings:
+
+| API demo | First-use metric | Repeat-use metric |
+|---|---|---|
+| Tokenizer / chat template | Tokenizer load + tokenization | Cached tokenizer + tokenization |
+| Image processor | Processor load + preprocessing | Cached processor + preprocessing |
+| Audio feature extractor | Feature-extractor load + audio preprocessing | Cached extractor + audio preprocessing |
+| Direct AutoModel | Processor/model load, preprocessing, and forward pass | Cached model/processor, preprocessing, and forward pass |
+| Text generation | Pipeline load + first generation | Cached pipeline + generation |
+| Structured output | Pipeline load + constrained generation | Cached pipeline + constrained generation |
+| Multimodal embeddings | Processor/model load + text/media embedding comparison | Cached model + embedding comparison |
+| AutoConfig / Hub options | Config metadata request duration | Repeated metadata request duration; model weights are not loaded |
+| ModelRegistry | Model metadata/cache inspection duration | Repeated metadata/cache inspection duration; model weights are not loaded |
+| Image / audio / video I/O | Decode and transform duration | Repeated decode and transform duration; no inference model is loaded |
+| Tensor / maths / random | In-memory operation duration | Repeated in-memory operation duration; no model is downloaded |
+| Runtime settings | Runtime inspection and settings-application duration | Repeated runtime inspection; no model is downloaded |
+
+A metadata lookup, media decode, tensor operation, or random-number operation is not presented as model inference. Demos without model weights show execution duration rather than an artificial “download” value.
+
+## Repeatable cold-cache and warm-cache protocol
+
+1. Open the site in a current Chromium-based browser. Record the browser/version, operating system, CPU/GPU, RAM, and network type.
+2. For a true cold-cache test, clear the site's browser storage including **Cache Storage** and other site data, then reload. Clearing only Local Storage does not remove downloaded model artifacts.
+3. Open one demo at a time and keep the model, input, backend, and dtype unchanged across repetitions.
+4. Click **Load model & run**. Record model load + setup, observed transfer bytes/events/window, and first inference.
+5. Repeat the same input at least five times. The benchmark panel stores the warm timings and calculates their median.
+6. Reload the page without clearing site data and repeat once to observe the browser-cache path.
+7. Repeat with WASM and WebGPU separately where supported. Do not compare different input sizes or dtypes as though they were controlled tests.
+8. Export JSON/CSV from the Performance report. Keep the export with the device/browser/network details for reproducibility.
+
+## Coverage under test
+
+- 25 unique first-class `pipeline()` task IDs.
+- 1 additional sentence-similarity demo implemented with feature-extraction embeddings and cosine similarity.
+- 14 advanced API labs, including tokenizers, processors, tensor/math helpers, media I/O, runtime/cache settings, ModelRegistry, direct AutoModel inference, config inspection, streaming generation, structured output, multimodal embeddings, and seeded random utilities.
+- Direct model architecture families and platform integrations are catalogued separately where they require model-specific preprocessing or cannot be meaningfully represented as one generic browser demo.
+
+See [FEATURE-COVERAGE.md](./FEATURE-COVERAGE.md) for the full inventory and documented limitations.
+
+## Important interpretation notes
+
+- A page refresh is not a cold-cache test.
+- Model load + setup is an end-to-end initialization measurement, not a pure download measurement.
+- Progress callback bytes are observed per-file values. They may not include every request or reflect compressed wire bytes.
+- A warm run is only comparable when task, model, backend, dtype, input, browser, and device are held constant.
+- WebGPU is browser/device dependent. The app may use WASM when Auto mode cannot use WebGPU.
+- The large LFM3-VL example is a copyable reference and is not auto-loaded; its multi-gigabyte artifacts should be tested separately on suitable hardware.
