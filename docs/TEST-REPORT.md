@@ -6,15 +6,20 @@ This report separates checks that can be run in CI from real model timings that 
 
 | Check | Status | Evidence |
 |---|---|---|
-| Catalog coverage tests | Included in CI | 26 demo cards: 25 unique first-class pipeline task IDs plus sentence similarity |
-| Advanced API coverage tests | Included in CI | 14 advanced API areas |
-| Benchmark aggregation tests | Included in CI | First-use, warm-run, median, and local-storage behavior |
-| TypeScript + production build | Included in CI | `npm run build` runs `tsc --noEmit` and `vite build` |
+| Catalog coverage tests | **Passed** | 3 test cases; 26 demo cards, 25 unique first-class pipeline task IDs plus sentence similarity |
+| Advanced API coverage tests | **Passed** | 14 advanced API areas verified |
+| Benchmark aggregation tests | **Passed** | 3 test cases for first-use, warm-run, median, and local-storage behavior |
+| Tensor and seeded random tests | **Passed** | 2 test cases exercise public tensor helpers and deterministic random output |
+| TypeScript + production build | **Passed** | `tsc --noEmit` and `vite build` |
 | Cold model download timings | Not yet measured on a real browser/device | Must clear browser model cache and run the demos |
 | Warm inference timings | Not yet measured on a real browser/device | Must repeat the same input after model initialization |
 | Cross-browser manual smoke tests | Not yet completed | Run on target browsers/devices |
 
-No device-specific timings are fabricated in this document. Model sizes, network throughput, cache state, GPU support, memory, browser versions, and ONNX Runtime initialization can change first-use and repeat-use timings substantially.
+**Automated CI:** [Run #13 — passed](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43035879458). All 3 test files and 8 tests passed. The production build transformed 1,605 modules and completed in 3.23 seconds.
+
+No device-specific model timings are fabricated in this document. Model sizes, network throughput, cache state, GPU support, memory, browser versions, and ONNX Runtime initialization can change first-use and repeat-use timings substantially.
+
+The CI production build emitted a 962.95 kB JavaScript bundle (285.71 kB gzip), a 31.57 kB CSS bundle (7.67 kB gzip), and a 26,861.78 kB ONNX Runtime WASM asset (6,690.35 kB gzip). The WASM binary is a runtime asset and is typically needed when the WASM backend initializes; it is not an individual model's weight download.
 
 ## What the application measures
 
