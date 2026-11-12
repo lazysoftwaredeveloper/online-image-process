@@ -13,6 +13,7 @@ This report separates checks that can be run in CI from real model timings that 
 | TypeScript + production build | **Passed** | `tsc --noEmit` and `vite build` |
 | Cold model download timings | Not yet measured on a real browser/device | Must clear browser model cache and run the demos |
 | Warm inference timings | Not yet measured on a real browser/device | Must repeat the same input after model initialization |
+| Cloud Chromium + WASM model inference | Added to CI | Real Hub download + one first inference + five warm inferences; JSON/screenshot artifacts uploaded by the workflow |
 | Cross-browser manual smoke tests | Not yet completed | Run on target browsers/devices |
 
 **Automated CI:** [Run #13 — passed](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43035879458). All 3 test files and 8 tests passed. The production build transformed 1,605 modules and completed in 3.23 seconds.
@@ -59,6 +60,14 @@ The API lab displays total execution time for every demo. Model-backed labs addi
 | Runtime settings | Runtime inspection and settings-application duration | Repeated runtime inspection; no model is downloaded |
 
 A metadata lookup, media decode, tensor operation, or random-number operation is not presented as model inference. Demos without model weights show execution duration rather than an artificial “download” value.
+
+## Cloud browser benchmark
+
+The CI workflow includes a Playwright Chromium test on a fresh browser context. It selects the compact `onnx-community/all-MiniLM-L6-v2-ONNX` feature-extraction model, forces the WASM backend, runs the built-in **Benchmark · 1 + 5 runs** flow, and exports the browser's measured initialization, first-inference, five warm-inference, and transfer-telemetry values.
+
+The workflow uploads `cloud-browser-benchmark.json` and a full-page screenshot as the `cloud-browser-benchmark` artifact. The report includes the browser/runner environment and explicitly identifies that the results are GitHub-hosted CPU/WASM measurements, not Apple Silicon/WebGPU measurements.
+
+The first CI execution validates whether the hosted runner can complete the actual Hub download and browser inference. If the Hugging Face Hub or CDN is temporarily unavailable, the workflow retains Playwright traces/screenshots for diagnosis and retries once.
 
 ## Repeatable cold-cache and warm-cache protocol
 
