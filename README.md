@@ -6,7 +6,7 @@ A browser-first capability lab for Hugging Face Transformers.js. The goal is to 
 
 - **Browser inference, not a hosted inference API.** Model files are fetched from the Hugging Face Hub; inference runs in the visitor's browser through ONNX Runtime.
 - **No hidden backend.** The application is a static Vite + React + TypeScript site. User media is processed in the browser.
-- **Explicit coverage.** Every documented pipeline() task is represented in the catalog. Direct model APIs and the tokenizer, processor, tensor, media I/O, generation, runtime, and cache concepts are documented in the Advanced API lab.
+- **Explicit coverage.** The catalog includes all 25 first-class pipeline task IDs plus a sentence-similarity demo implemented with feature-extraction. The Advanced API lab adds 14 interactive areas covering tokenizers/chat templates, image and audio processors, tensors/math, image/audio/video I/O, runtime configuration, ModelRegistry, direct AutoModel calls, config loading, streaming generation, structured output, multimodal embeddings, and random utilities.
 - **Honest benchmarks.** First-load and warm-inference numbers are measured in the current browser/device and saved locally. No universal latency numbers are hard-coded because model size, network, browser, backend, and hardware materially affect results.
 - **Scope labels.** Each demo explains practical use cases, expected input/output, limitations, model ID, and model-loading cost.
 
@@ -14,7 +14,8 @@ A browser-first capability lab for Hugging Face Transformers.js. The goal is to 
 
 - Vite
 - React + TypeScript
-- @huggingface/transformers (pinned to the current stable release)
+- @huggingface/transformers 4.3.2 (pinned)
+- @huggingface/transformers-structured-output 4.3.2 (pinned, experimental constrained generation)
 - Browser Cache API for model assets (managed by Transformers.js)
 - Local Storage for benchmark history and preferences
 
@@ -26,6 +27,8 @@ No application server or inference API is required.
     npm run dev
     npm run build
     npm run test
+    npx playwright install chromium  # once, for local browser tests
+    npm run test:e2e
 
 ## Benchmark methodology
 
@@ -40,6 +43,6 @@ The UI labels initialization time as **model load + runtime setup**, not pure ne
 
 ## Coverage
 
-See docs/FEATURE-COVERAGE.md for the supported pipeline inventory, advanced API coverage, and explicitly unsupported task families.
+See docs/FEATURE-COVERAGE.md for the supported pipeline inventory, advanced API coverage, direct model families, platform integrations, and explicitly unsupported task families.
 
-See docs/TEST-REPORT.md for the test protocol, environment fields, and how to generate a device-specific report from the live benchmark panel.
+See docs/TEST-REPORT.md for automated and cloud-browser results, the test protocol, environment fields, and how to generate a device-specific report from the live benchmark panel. The Playwright E2E job runs a real Chromium/WASM model inference and uploads a JSON benchmark plus screenshot.
