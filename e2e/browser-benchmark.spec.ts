@@ -23,7 +23,7 @@ test('loads a real model and records cold-load plus five warm inferences in Chro
   await page.getByRole('button', { name: 'Text', exact: true }).click();
   await page.getByRole('button', { name: /Text embeddings/ }).click();
   await page.getByLabel('Backend').selectOption('wasm');
-  await page.getByRole('button', { name: /Benchmark/ }).click();
+  await page.locator('.run-actions').getByRole('button', { name: /Benchmark/ }).click();
 
   await expect(page.getByText('Complete', { exact: true })).toBeVisible({ timeout: 11 * 60 * 1000 });
   const output = await page.locator('.json-output').textContent();
