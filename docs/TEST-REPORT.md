@@ -11,12 +11,13 @@ This report separates checks that can be run in CI from real model timings that 
 | Benchmark aggregation tests | **Passed** | 3 test cases for first-use, warm-run, median, and local-storage behavior |
 | Tensor and seeded random tests | **Passed** | 2 test cases exercise public tensor helpers and deterministic random output |
 | TypeScript + production build | **Passed** | `tsc --noEmit` and `vite build` |
-| Cold model download timings | Not yet measured on a real browser/device | Must clear browser model cache and run the demos |
-| Warm inference timings | Not yet measured on a real browser/device | Must repeat the same input after model initialization |
-| Cloud Chromium + WASM model inference | Added to CI | Real Hub download + one first inference + five warm inferences; JSON/screenshot artifacts uploaded by the workflow |
+| Cloud Chromium cold-cache model initialization | **Measured** | 3.411 s for the selected MiniLM model on GitHub-hosted Ubuntu |
+| Cloud Chromium first inference | **Measured** | 124.5 ms |
+| Cloud Chromium warm inference | **Measured** | 5 runs; median 60.9 ms |
+| Cloud Chromium + WASM model inference | **Passed** | Real Hub model load + six real inferences; JSON/screenshot artifacts uploaded |
 | Cross-browser manual smoke tests | Not yet completed | Run on target browsers/devices |
 
-**Automated CI:** [Run #13 — passed](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43035879458). All 3 test files and 8 tests passed. The production build transformed 1,605 modules and completed in 3.23 seconds.
+**Automated CI:** [Run #18 — push, passed](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43129029999) and [Run #19 — pull request, passed](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43129038291). Both passed unit tests, TypeScript/production build, and the real-browser inference job. The earlier [Run #13](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43035879458) also passed the original 8 unit tests and production build.
 
 No device-specific model timings are fabricated in this document. Model sizes, network throughput, cache state, GPU support, memory, browser versions, and ONNX Runtime initialization can change first-use and repeat-use timings substantially.
 
@@ -67,7 +68,28 @@ The CI workflow includes a Playwright Chromium test on a fresh browser context. 
 
 The workflow uploads `cloud-browser-benchmark.json` and a full-page screenshot as the `cloud-browser-benchmark` artifact. The report includes the browser/runner environment and explicitly identifies that the results are GitHub-hosted CPU/WASM measurements, not Apple Silicon/WebGPU measurements.
 
-The first CI execution validates whether the hosted runner can complete the actual Hub download and browser inference. If the Hugging Face Hub or CDN is temporarily unavailable, the workflow retains Playwright traces/screenshots for diagnosis and retries once.
+**First successful cloud measurement — 2026-11-12**
+
+| Metric | Measured value |
+|---|---:|
+| Model | `onnx-community/all-MiniLM-L6-v2-ONNX` |
+| Pipeline | `feature-extraction` |
+| Backend / dtype | WASM / auto |
+| Model load + runtime setup | 3,411 ms |
+| Observed file-transfer telemetry | 90,854,365 bytes (86.65 MiB) |
+| Progress events | 538 |
+| Transfer event window | 1,760.9 ms |
+| First inference | 124.5 ms |
+| Warm inference runs | 58.7, 60.9, 61.4, 75.6, 27.1 ms |
+| Warm median | 60.9 ms |
+| Uncaught page errors | 0 |
+| Failed network requests | 0 |
+
+**Runner:** GitHub-hosted Ubuntu 24.04, Headless Chromium 141.0.7390.37, Linux x86_64, 4 logical CPUs, reported device memory 8 GB, `crossOriginIsolated=false`.
+
+The actual inference returned an embedding tensor with shape `[1, 384]`. The browser context was fresh, so this run did not reuse model assets from an earlier Playwright test. The full JSON report and screenshot are attached to [CI Run #18 artifact](https://github.com/lazysoftwaredeveloper/online-image-process/actions/runs/43129029999/artifacts/13905060365).
+
+These values are a baseline for this specific GitHub-hosted CPU/WASM runner. They are not a measurement of the user's Mac, Apple Silicon, WebGPU, or a production visitor's device. The transfer-event window is not the total download duration, and progress-callback bytes are not guaranteed to equal exact wire bytes.
 
 ## Repeatable cold-cache and warm-cache protocol
 

@@ -27,6 +27,7 @@ No application server or inference API is required.
     npm run dev
     npm run build
     npm run test
+    npm run test:e2e
 
 ## Benchmark methodology
 
@@ -43,4 +44,4 @@ The UI labels initialization time as **model load + runtime setup**, not pure ne
 
 See docs/FEATURE-COVERAGE.md for the supported pipeline inventory, advanced API coverage, direct model families, platform integrations, and explicitly unsupported task families.
 
-See docs/TEST-REPORT.md for the test protocol, environment fields, and how to generate a device-specific report from the live benchmark panel.
+See docs/TEST-REPORT.md for automated and cloud-browser results, the test protocol, environment fields, and how to generate a device-specific report from the live benchmark panel. The Playwright E2E job runs a real Chromium/WASM model inference and uploads a JSON benchmark plus screenshot.
