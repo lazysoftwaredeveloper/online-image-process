@@ -1,6 +1,6 @@
 # Cloud browser benchmark — 2026-11-12
 
-<badge>Automated browser inference passed</badge>
+**Status: automated browser inference passed.**
 
 ## Execution
 

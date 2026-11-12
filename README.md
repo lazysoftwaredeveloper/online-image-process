@@ -27,6 +27,7 @@ No application server or inference API is required.
     npm run dev
     npm run build
     npm run test
+    npx playwright install chromium  # once, for local browser tests
     npm run test:e2e
 
 ## Benchmark methodology
